@@ -68,6 +68,7 @@ def should_merge(a_tl, a_br, b_tl, b_br, gap_x=20, gap_y=50):
     return True
 
 def draw_boxes_from_data(data, image_path):
+
     # Define a color for each field
     colors = {
         "headline": (255, 0, 0),
@@ -89,6 +90,10 @@ def draw_boxes_from_data(data, image_path):
         score = fuzz.partial_ratio(headline_text, text)
 
         if score > 80 and len(text.split()) > 1:
+            print(text)
+            # remove the matched text once from headline_text
+            headline_text = headline_text.replace(text, "", 1).strip()
+
             tl = coordinates[0]  # top-left
             br = coordinates[2]  # bottom-right
             top_left = (int(tl[0]), int(tl[1]))
@@ -110,15 +115,12 @@ def draw_boxes_from_data(data, image_path):
     for top_left, bottom_right in validated["headline"]:
         cv2.rectangle(image, top_left, bottom_right, colors["headline"], 2)
 
-
     print("done") 
-    # Save only — no window popup
-    output_path = f"{image_path}_result.png"
+    output_path = f"{os.path.splitext(image_path)[0]}_result{os.path.splitext(image_path)[1]}"
     cv2.imwrite(output_path, image)
     print(f"Saved boxed image to {output_path}")
 
-
 if __name__ == "__main__":
-    image_path = "sample2.png"
+    image_path = "sample3.png"
     data, image_path = generate(image_path)
     draw_boxes_from_data(data, image_path)
