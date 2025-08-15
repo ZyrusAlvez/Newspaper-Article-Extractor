@@ -52,7 +52,148 @@ def generate(image_path):
     print(pretty)
 
     return data, image_path
+import google.generativeai as genai
+import json
+import os
+from dotenv import load_dotenv
+import easyocr
+import cv2
+from rapidfuzz import fuzz
 
+load_dotenv()
+
+def generate(image_path):
+    api_key = os.getenv("GEMINI_API_KEY")
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash",
+        system_instruction="You are a helpful assistant that extracts newspaper fields from images.",
+        generation_config={"response_mime_type": "application/json"}
+    )
+
+    with open(image_path, "rb") as image_file:
+        image_bytes = image_file.read()
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "headline": {"type": "array", "items": {"type": "string"}},
+            "subHeadline": {"type": "array", "items": {"type": "string"}},
+            "byline": {"type": "array", "items": {"type": "string"}},
+            "body": {"type": "array", "items": {"type": "string"}},
+            "quotes": {"type": "array", "items": {"type": "string"}},
+            "factboxes": {"type": "array", "items": {"type": "string"}}
+        }
+    }
+
+    prompt = (
+        "This is a newspaper image. "
+        "Extract any of the following fields if available: "
+        "headline, subHeadline, byline, body, quotes, factboxes. "
+        "Return the result strictly matching this JSON schema:\n\n"
+        f"{json.dumps(schema, indent=2)}"
+    )
+
+    response = model.generate_content([
+        {"text": prompt},
+        {"mime_type": "image/png", "data": image_bytes}
+    ])
+
+    raw_json = response.text
+    data = json.loads(raw_json)
+    pretty = json.dumps(data, indent=2)
+    print(pretty)
+
+    return data, image_path
+
+def should_merge(ex_tl, ex_tr, ex_br, ex_bl, tl, tr, br, bl, gap_x=20, gap_y=50):
+    print(ex_tl, ex_tr, ex_br, ex_bl, tl, tr, br, bl)
+    horizontal_close = abs(ex_tl[1] - tl[1]) < gap_x
+    if horizontal_close:
+        return True
+    else:
+        """
+        Returns True if rectangles overlap or are within gap thresholds.
+        """
+        if ex_br[0] + gap_x < tl[0]:  # a is strictly left of b
+            return False
+        if br[0] + gap_x < ex_tl[0]:  # b is strictly left of a
+            return False
+        if ex_br[1] + gap_y < tl[1]:  # a is strictly above b
+            return False
+        if br[1] + gap_y < ex_tl[1]:  # b is strictly above a
+            return False
+        return True
+
+    
+
+def draw_boxes_from_data(data, image_path):
+
+    # Define a color for each field
+    colors = {
+        "headline": (255, 0, 0),
+        "subHeadline": (0, 255, 0),
+        "byline": (0, 0, 255),
+        "body": (255, 255, 0),
+        "quotes": (255, 0, 255),
+        "factboxes": (0, 255, 255),
+    }
+
+    reader = easyocr.Reader(['en'])
+    image = cv2.imread(image_path)
+    results = reader.readtext(image)
+
+    validated = {"headline": []}
+    headline_text = " ".join(data['headline'])
+
+    for coordinates, text, _ in results:
+        score = fuzz.partial_ratio(headline_text, text)
+
+        if score > 80 and len(text.split()) > 1:
+            print(text)
+            # remove the matched text once from headline_text
+            headline_text = headline_text.replace(text, "", 1).strip()
+
+            tl = coordinates[0]  # top-left
+            tr = coordinates[1] 
+            br = coordinates[2]  # bottom-right
+            bl = coordinates[3]  # bottom-right
+            top_left = (int(tl[0]), int(tl[1]))
+            top_right = (int(tr[0]), int(tr[1]))
+            bottom_right = (int(br[0]), int(br[1]))
+            bottom_left = (int(bl[0]), int(bl[1]))
+
+            merged = False
+            for i, (ex_tl, ex_tr, ex_br, ex_bl) in enumerate(validated["headline"]):
+                print(text)
+                if should_merge(ex_tl, ex_tr, ex_br, ex_bl, top_left, top_right, bottom_right, bottom_left):
+                    # Calculate the new merged bounding box
+                    new_tl = (min(ex_tl[0], top_left[0]), min(ex_tl[1], top_left[1]))
+                    new_tr = (max(ex_tr[0], top_right[0]), min(ex_tr[1], top_right[1]))
+                    new_br = (max(ex_br[0], bottom_right[0]), max(ex_br[1], bottom_right[1]))
+                    new_bl = (min(ex_bl[0], bottom_left[0]), max(ex_bl[1], bottom_left[1]))
+
+                    validated["headline"][i] = (new_tl, new_tr, new_br, new_bl)
+                    merged = True
+                    break
+
+            if not merged:
+                validated["headline"].append((top_left, top_right, bottom_right, bottom_left))
+    print(validated["headline"])
+    # Draw merged bounding boxes
+    for top_left, _ , bottom_right, _ in validated["headline"]:
+        cv2.rectangle(image, top_left, bottom_right, colors["headline"], 2)
+
+    print("done") 
+    output_path = f"{os.path.splitext(image_path)[0]}_result{os.path.splitext(image_path)[1]}"
+    cv2.imwrite(output_path, image)
+    print(f"Saved boxed image to {output_path}")
+
+if __name__ == "__main__":
+    image_path = "sample3.png"
+    data, image_path = generate(image_path)
+    draw_boxes_from_data(data, image_path)
 def should_merge(a_tl, a_br, b_tl, b_br, gap_x=20, gap_y=50):
     """
     Returns True if rectangles overlap or are within gap thresholds.
@@ -121,6 +262,6 @@ def draw_boxes_from_data(data, image_path):
     print(f"Saved boxed image to {output_path}")
 
 if __name__ == "__main__":
-    image_path = "sample3.png"
+    image_path = "sample2.png"
     data, image_path = generate(image_path)
     draw_boxes_from_data(data, image_path)
